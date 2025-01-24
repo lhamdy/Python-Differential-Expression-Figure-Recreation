@@ -1,0 +1,69 @@
+```{r load_packages}
+library("tidyverse")
+library("DESeq2")
+```
+```{r load_data}
+#read in the counts data
+counts <- read_tsv("GSE221115_R-G-spMN.txt") 
+#filter out the rows that only contain 0s
+filtered_counts <- counts %>% filter(!apply(select(., -gene_id, -gene_name), 1, function(x) length(unique(x)) == 1))
+filtered_counts
+```
+
+```{r filter_counts}
+#get the sample names from the counts tibble
+sample_names <- colnames(filtered_counts)[-1][-1]
+sample_names
+```
+
+```{r create_metadata_tibble}
+#create metadata tibble from sample names
+metadata <- tibble(sample=sample_names, condition=sapply(sample_names, function(x) return(substring(x, 1, 1))))
+metadata
+```
+
+```{r run_DESeq2}
+#create matrix of the counts
+mat <- filtered_counts %>% select(-gene_id, -gene_name) %>% as.matrix()
+#set the matrix row names to be the gene_ids
+rownames(mat) <- filtered_counts %>% pull(gene_id)
+#set the condition to be a factor (required by DESeq2)
+metadata$condition <- as.factor(metadata$condition)
+#create deseq dataset
+dds <- DESeqDataSetFromMatrix(countData = mat,colData = metadata, design = ~condition)
+#run deseq
+dds <- DESeq(dds)
+```
+
+```{r summary}
+#get the results from deseq and turn it into a tibble
+dds_results <- results(dds)
+dds_tib <- dds_results %>% as.tibble() %>% mutate(gene=rownames(dds_results))
+#write the deseq output to a csv for use in the python script
+write_excel_csv(dds_tib, "r_deseq2_output.csv")
+```
+
+
+```{r volcano_plot}
+#plot volcano plot
+dds_tib %>%
+  # Create a new column to assign colors based on thresholds
+  mutate(
+    significance = case_when(
+      log2FoldChange > 1 & padj < 0.1 ~ "Upregulated",
+      log2FoldChange < -1 & padj < 0.1 ~ "Downregulated",
+      TRUE ~ "Not Significant"
+    ),
+    neg_log10_padj = -log10(padj)  # Transform padj for y-axis
+  ) %>%
+  ggplot(aes(x = log2FoldChange, y = neg_log10_padj, color = significance)) +
+  geom_point() +  # Add points
+  scale_color_manual(
+    values = c("Upregulated" = "red", "Downregulated" = "blue", "Not Significant" = "gray")
+  ) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dotted", color = "black") +  # Add vertical lines
+  geom_hline(yintercept = -log10(0.1), linetype = "dotted", color = "black") +  # Add horizontal line
+  ylab("-log10(padj)") +
+  ggtitle("DEGs between R and G Neurons") +
+  theme_minimal()
+```
